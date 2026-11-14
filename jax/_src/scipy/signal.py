@@ -651,8 +651,8 @@ def _spectral_helper(x: Array, y: ArrayLike | None, fs: ArrayLike = 1.0,
         f"Unknown boundary option '{boundary}', "
         f"must be one of: {list(boundary_funcs.keys())}")
 
-  axis = core.concrete_or_error(operator.index, axis, "axis of windowed-FFT")
-  axis = canonicalize_axis(axis, x.ndim)
+  detrend_axis = core.concrete_or_error(operator.index, axis, "axis of windowed-FFT")
+  axis = canonicalize_axis(detrend_axis, x.ndim)
 
   if y is None:
     check_arraylike('spectral_helper', x)
@@ -753,13 +753,12 @@ def _spectral_helper(x: Array, y: ArrayLike | None, fs: ArrayLike = 1.0,
   if isinstance(detrend_type, str):
     detrend_func = partial(detrend, type=detrend_type, axis=-1)
   elif callable(detrend_type):
-    if axis != -1:
-      # Wrap this function so that it receives a shape that it could
-      # reasonably expect to receive.
+    if detrend_axis != -1:
+      # Restore the original axis for the detrending callback.
       def detrend_func(d):
-        d = jnp.moveaxis(d, axis, -1)
+        d = jnp.moveaxis(d, -1, detrend_axis)
         d = detrend_type(d)
-        return jnp.moveaxis(d, -1, axis)
+        return jnp.moveaxis(d, detrend_axis, -1)
     else:
       detrend_func = detrend_type
   elif not detrend_type:

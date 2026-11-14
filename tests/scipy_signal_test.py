@@ -244,6 +244,67 @@ class LaxBackedScipySignalTests(jtu.JaxTestCase):
     self._CheckAgainstNumpy(osp_fun, jsp_fun, args_maker, rtol=tol, atol=tol)
     self._CompileAndCheck(jsp_fun, args_maker, rtol=tol, atol=tol)
 
+  @jtu.sample_product(
+    [dict(op='stft', shape=(8,), timeaxis=-1),
+     dict(op='stft', shape=(8, 3), timeaxis=0),
+     dict(op='welch', shape=(8,), timeaxis=-1),
+     dict(op='welch', shape=(8, 3), timeaxis=0),
+     dict(op='csd', shape=(8,), timeaxis=-1),
+     dict(op='csd', shape=(8, 3), timeaxis=0)],
+  )
+  def testSpectralCallableDetrend(self, *, op, shape, timeaxis):
+    dtype = jtu.dtypes.floating[-1]
+    self._testSpectralCallableDetrend(
+        op=op, shape=shape, timeaxis=timeaxis, dtype=dtype, noverlap=0)
+
+  @jtu.sample_product(
+    [dict(op='stft', shape=(3, 8), timeaxis=-1, noverlap=0, is_complex=True),
+     dict(op='stft', shape=(2, 8, 3), timeaxis=1, noverlap=0, is_complex=False),
+     dict(op='stft', shape=(2, 8, 3), timeaxis=-2, noverlap=0, is_complex=True),
+     dict(op='stft', shape=(8,), timeaxis=0, noverlap=0, is_complex=False),
+     dict(op='stft', shape=(3, 8), timeaxis=1, noverlap=0, is_complex=True),
+     dict(op='stft', shape=(8,), timeaxis=-1, noverlap=None, is_complex=False),
+     dict(op='welch', shape=(3, 8), timeaxis=-1, noverlap=None, is_complex=True),
+     dict(op='csd', shape=(3, 8), timeaxis=-1, noverlap=None, is_complex=True)],
+  )
+  def testSpectralCallableDetrendAxes(
+      self, *, op, shape, timeaxis, noverlap, is_complex):
+    dtype = (jtu.dtypes.complex if is_complex else jtu.dtypes.floating)[-1]
+    self._testSpectralCallableDetrend(
+        op=op, shape=shape, timeaxis=timeaxis, dtype=dtype, noverlap=noverlap)
+
+  def _testSpectralCallableDetrend(
+      self, *, op, shape, timeaxis, dtype, noverlap):
+    def center(d):
+      return d - d.mean(axis=timeaxis, keepdims=True)
+
+    is_complex = np.issubdtype(dtype, np.complexfloating)
+    kwds = dict(window=np.ones(4, _real_dtype(dtype)), nperseg=4,
+                noverlap=noverlap, detrend=center, axis=timeaxis,
+                return_onesided=not is_complex)
+    if op == 'stft':
+      kwds.update(boundary=None, padded=False)
+    result_dtype = _real_dtype(dtype) if op == 'welch' else _complex_dtype(dtype)
+    # Constant detrending is a layout-independent reference for the equivalent
+    # per-segment centering callable in Welch/CSD.
+    osp_kwds = kwds if op == 'stft' else dict(kwds, detrend='constant')
+
+    def osp_fun(*args):
+      result = getattr(osp_signal, op)(*args, **osp_kwds)
+      return (tuple(a.astype(_real_dtype(dtype)) for a in result[:-1])
+              + (result[-1].astype(result_dtype),))
+
+    jsp_fun = partial(getattr(jsp_signal, op), **kwds)
+    tol = {np.float32: 1e-5, np.float64: 1e-12,
+           np.complex64: 1e-5, np.complex128: 1e-12}
+    if jtu.test_device_matches(['tpu']):
+      tol = _TPU_FFT_TOL
+    rng = jtu.rand_default(self.rng())
+    args_maker = lambda: [rng(shape, dtype) for _ in range(2 if op == 'csd' else 1)]
+
+    self._CheckAgainstNumpy(osp_fun, jsp_fun, args_maker, rtol=tol, atol=tol)
+    self._CompileAndCheck(jsp_fun, args_maker, rtol=tol, atol=tol)
+
   # Tests with `average == 'median'`` is excluded from `testCsd*`
   # due to the issue:
   #   https://github.com/scipy/scipy/issues/15601
